@@ -31,7 +31,11 @@ extern "C" {
 #ifdef WEBVIEW_STATIC
 #define WEBVIEW_API static
 #else
+#if defined(WEBVIEW_WINAPI)
+#define WEBVIEW_API extern __declspec(dllexport)
+#else
 #define WEBVIEW_API extern
+#endif
 #endif
 
 #include <stdint.h>
@@ -153,6 +157,12 @@ static const char *webview_check_url(const char *url) {
 WEBVIEW_API int webview(const char *title, const char *url, int width,
                         int height, int resizable);
 
+WEBVIEW_API struct webview* webview_alloc(const char* title, const char* url,
+                                          int width, int height,
+                                          int resizable, int debug,
+                                          webview_external_invoke_cb_t cb);
+WEBVIEW_API void webview_release(struct webview* webview);
+
 WEBVIEW_API int webview_init(struct webview *w);
 WEBVIEW_API int webview_loop(struct webview *w, int blocking);
 WEBVIEW_API int webview_eval(struct webview *w, const char *js);
@@ -171,6 +181,9 @@ WEBVIEW_API void webview_terminate(struct webview *w);
 WEBVIEW_API void webview_exit(struct webview *w);
 WEBVIEW_API void webview_debug(const char *format, ...);
 WEBVIEW_API void webview_print_log(const char *s);
+
+WEBVIEW_API void webview_set_userdata(struct webview* w, void* userdata);
+WEBVIEW_API void* webview_get_userdata(struct webview* w);
 
 #ifdef WEBVIEW_IMPLEMENTATION
 #undef WEBVIEW_IMPLEMENTATION
@@ -192,6 +205,42 @@ WEBVIEW_API int webview(const char *title, const char *url, int width,
   }
   webview_exit(&webview);
   return 0;
+}
+
+WEBVIEW_API struct webview* webview_alloc(const char* title, const char* url,
+                                          int width, int height,
+                                          int resizable, int debug,
+                                          webview_external_invoke_cb_t cb) {
+  struct webview* webview = (struct webview*)calloc(1, sizeof(*webview));
+  webview->title = title;
+  webview->url = url;
+  webview->width = width;
+  webview->height = height;
+  webview->resizable = resizable;
+  webview->debug = debug;
+  webview->external_invoke_cb = cb;
+
+  int r = webview_init(webview);
+  if (r != 0) {
+    webview_release(webview);
+    return NULL;
+  }
+  
+  return webview;
+}
+
+WEBVIEW_API void webview_release(struct webview* webview) {
+  free(webview);
+}
+
+WEBVIEW_API void webview_set_userdata(struct webview* w, void* ud)
+{
+  w->userdata = ud;
+}
+
+WEBVIEW_API void* webview_get_userdata(struct webview* w)
+{
+  return w->userdata;
 }
 
 WEBVIEW_API void webview_debug(const char *format, ...) {
@@ -493,6 +542,7 @@ WEBVIEW_API void webview_print_log(const char *s) {
 #pragma comment(lib, "oleaut32.lib")
 
 #define WM_WEBVIEW_DISPATCH (WM_APP + 1)
+
 
 typedef struct {
   IOleInPlaceFrame frame;
@@ -834,7 +884,7 @@ static HRESULT STDMETHODCALLTYPE UI_ShowContextMenu(
 static HRESULT STDMETHODCALLTYPE
 UI_GetHostInfo(IDocHostUIHandler FAR *This, DOCHOSTUIINFO __RPC_FAR *pInfo) {
   pInfo->cbSize = sizeof(DOCHOSTUIINFO);
-  pInfo->dwFlags = DOCHOSTUIFLAG_NO3DBORDER;
+  pInfo->dwFlags = DOCHOSTUIFLAG_NO3DBORDER | DOCHOSTUIFLAG_DPI_AWARE;
   pInfo->dwDoubleClick = DOCHOSTUIDBLCLK_DEFAULT;
   return S_OK;
 }
@@ -1141,6 +1191,9 @@ static int DisplayHTMLPage(struct webview *w) {
       webBrowser2->lpVtbl->Release(webBrowser2);
       return (-6);
     }
+
+	webBrowser2->lpVtbl->put_Silent(webBrowser2, w->debug ? FALSE : TRUE);
+
     webBrowser2->lpVtbl->Navigate2(webBrowser2, &myURL, 0, 0, 0, 0);
     VariantClear(&myURL);
     if (!isDataURL) {
@@ -1266,6 +1319,7 @@ WEBVIEW_API int webview_init(struct webview *w) {
   RECT rect;
   HICON hIcon;
 
+
   if (webview_fix_ie_compat_mode() < 0) {
     return -1;
   }
@@ -1278,6 +1332,11 @@ WEBVIEW_API int webview_init(struct webview *w) {
     return -1;
   }
   hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(1));
+
+#ifdef DPI_AWARENESS_CONTEXT_SYSTEM_AWARE //win8.1+
+  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
+#endif
+
   ZeroMemory(&wc, sizeof(WNDCLASSEX));
   wc.cbSize = sizeof(WNDCLASSEX);
   wc.hInstance = hInstance;
@@ -1291,10 +1350,15 @@ WEBVIEW_API int webview_init(struct webview *w) {
     style = WS_OVERLAPPED | WS_CAPTION | WS_MINIMIZEBOX | WS_SYSMENU;
   }
 
+#ifndef GetDpiForSystem //win8.1+
+#define GetDpiForSystem() (96.0f)
+#endif
+
+  double scale = GetDpiForSystem() / 96.0f;
   rect.left = 0;
   rect.top = 0;
-  rect.right = w->width;
-  rect.bottom = w->height;
+  rect.right = w->width * scale;
+  rect.bottom = w->height * scale;
   AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, 0);
 
   GetClientRect(GetDesktopWindow(), &clientRect);
@@ -2102,7 +2166,7 @@ WEBVIEW_API int webview_eval(struct webview *w, const char *js) {
 }
 
 WEBVIEW_API void webview_set_title(struct webview *w, const char *title) {
-  objc_msgSend(w->priv.window, sel_registerName("setTitle"),
+  objc_msgSend(w->priv.window, sel_registerName("setTitle:"),
                get_nsstring(title));
 }
 
