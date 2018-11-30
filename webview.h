@@ -445,6 +445,10 @@ WEBVIEW_API void webview_dialog(struct webview *w,
     gtk_file_chooser_set_show_hidden(GTK_FILE_CHOOSER(dlg), TRUE);
     gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dlg), TRUE);
     gtk_file_chooser_set_create_folders(GTK_FILE_CHOOSER(dlg), TRUE);
+    if (dlgtype == WEBVIEW_DIALOG_TYPE_SAVE &&
+        g_strcmp0(arg, "") != 0) {
+      gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dlg), arg);
+    }
     gint response = gtk_dialog_run(GTK_DIALOG(dlg));
     if (response == GTK_RESPONSE_ACCEPT) {
       gchar *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
@@ -1666,6 +1670,24 @@ WEBVIEW_API void webview_dialog(struct webview *w,
                   FOS_ALLNONSTORAGEITEMS | FOS_NOVALIDATE | FOS_SHAREAWARE |
                   FOS_NOTESTFILECREATE | FOS_NODEREFERENCELINKS |
                   FOS_FORCESHOWHIDDEN | FOS_DEFAULTNOMINIMODE;
+
+      if (strncmp(arg, "", 1) != 0) {
+        WCHAR *warg = webview_to_utf16(arg);
+        if (dlg->lpVtbl->SetFileName(dlg, warg) != S_OK) {
+          GlobalFree(warg);
+          goto error_dlg;
+        }
+        GlobalFree(warg);
+      }
+    }
+
+    if (strncmp(title, "", 1) != 0) {
+      WCHAR *wtitle = webview_to_utf16(title);
+      if (dlg->lpVtbl->SetTitle(dlg, wtitle) != S_OK) {
+        GlobalFree(wtitle);
+        goto error_dlg;
+      }
+      GlobalFree(wtitle);
     }
     if (dlg->lpVtbl->GetOptions(dlg, &opts) != S_OK) {
       goto error_dlg;
@@ -2235,6 +2257,9 @@ WEBVIEW_API void webview_dialog(struct webview *w,
     } else {
       panel = objc_msgSend((id)objc_getClass("NSSavePanel"),
                            sel_registerName("savePanel"));
+      if (strncmp(arg, "", 1) != 0) {
+        [panel setNameFieldStringValue:[NSString stringWithUTF8String:arg]];
+      }
     }
 
     objc_msgSend(panel, sel_registerName("setCanCreateDirectories:"), 1);
